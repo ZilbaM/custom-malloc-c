@@ -14,7 +14,6 @@ void *custom_malloc(size_t size) {
     if (size==0) {
         return NULL;
     }
-
     memory_block_header *block = free_list;
     memory_block_header *prev_block = NULL;
 
@@ -37,6 +36,7 @@ void *custom_malloc(size_t size) {
         block = block->next;
     }
 
+
     // If no blocks in the free list are big enough for our data, we move the break with sbrk
     memory_block_header *new_block = (memory_block_header*) sbrk(size + sizeof(memory_block_header));
     
@@ -48,8 +48,29 @@ void *custom_malloc(size_t size) {
     return (void *)(new_block + 1);
 }
 
+void custom_free(void *pointer) {
+    if (pointer == NULL) {
+        return;
+    }
+
+    memory_block_header *block = (memory_block_header*)pointer - 1;
+
+    block->next = free_list;
+    free_list = block;
+}
+
 int main(int agrc, char *argv[]) {
-    int *counter = (int*) custom_malloc(sizeof(int));
-    printf("%i\n", (int) counter);
-    printf("%i\n", *counter);
+
+    int *counter = (int*) custom_malloc(sizeof(4));
+    printf("Memory allocated at address %p with a value of %i\n", counter, *counter);
+
+    printf("Currently no element of free_list, so its value is pointing at NULL : %p\n", free_list);
+    custom_free(counter);
+    printf("We have freed the memory, so free_list includes now a pointer to %p (counter address minus the header size)\n", free_list);
+
+    int *counter2 = (int*) custom_malloc(sizeof(int));
+    printf("We created a new memory of the same size as the freed one, so it should take the freed address\n");
+    printf("Memory allocated at address %p with a value of %i\n", counter2, *counter2);
+
+
 }
