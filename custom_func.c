@@ -236,25 +236,30 @@ void *custom_calloc(size_t n, size_t size) {
 
 int main(int agrc, char *argv[]) {
 
-    int i, n;
-    int *a;
+    printf("Initial Break Address : %p\n\n", sbrk(0));
+    int *el1 = custom_malloc(sizeof(int));
+    int *el2 = custom_malloc((size_t) 100);
+    int *el3 = custom_malloc(sizeof(int));
+    printf("Break After memory allocation : %p\n", sbrk(0));
+    
+    printf("Element 1 - %p - Size : %i\n", el1,(int) ((memory_block_header *)el1 - 1)->size);
+    printf("Element 2 - %p - Size : %i\n", el2,(int) ((memory_block_header *)el2 - 1)->size);
+    printf("Element 3 - %p - Size : %i\n", el3,(int) ((memory_block_header *)el3 - 1)->size);
 
-    printf("Number of elements to be entered:");
-    scanf("%d",&n);
+    printf("\nWe deallocate element 2 with custom_free");
+    custom_free(el2);
+    print_free_list();
 
-    a = (int*)custom_calloc(n, sizeof(int));
-    printf("Enter %d numbers:\n",n);
-    for( i=0 ; i < n ; i++ ) {
-       scanf("%d",&a[i]);
-    }
+    printf("\nWe reallocate element 1 with a bigger size, so it should fuse with the free address that is adjacent");
+    el1 = custom_realloc(el1, (size_t) 50);
+    print_free_list();
+    printf("\n%p - size : %i\n", el1,(int) ((memory_block_header *)el1 - 1)->size);
 
-    printf("The numbers entered are: ");
-    for( i=0 ; i < n ; i++ ) {
-      printf("%d ",a[i]);
-    }
-    custom_free( a );
-   
-    return(0);
+    printf("\nIf we reallocate element 3 to a bigger size, as it is at the end of the heap, it should just move the breakline\n");
+    printf("Break Address Before : %p\n", sbrk(0));
+    el3 = custom_realloc(el3, (size_t) 100);
+    printf("Break Address After : %p\n", sbrk(0));
+    printf("Element 3 - %p - Size : %i\n", el3,(int) ((memory_block_header *)el3 - 1)->size);
 
 
 }
