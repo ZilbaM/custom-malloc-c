@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct memory_block_header {
     size_t size;
@@ -9,6 +10,103 @@ typedef struct memory_block_header {
 
 
 memory_block_header *free_list = NULL;
+
+void print_free_list() {
+    printf("\n----------------------\n");
+    printf("Printing free memory blocks list\n");
+    printf("----------------------\n");
+    memory_block_header *block = free_list;
+    int count = 1;
+    if (block==NULL) {
+        printf("List empty\n");
+    }
+    while (block != NULL) {
+        printf("%i - %p - size : %i\n", count, block, (int)block->size);
+        count++;
+        block = block->next;
+    }
+}
+
+memory_block_header* remove_element_from_free_list(memory_block_header *target) {
+    memory_block_header *block = free_list;
+    memory_block_header *prev_block = NULL;
+
+    // While we don't reach the end of the free list or if the list is not empty
+    while (block != NULL) {
+        // We check to find the block to remove from the list
+        if (block == target) {
+            if (prev_block != NULL) {
+                // We remove the found element from the free list, by making the pointer of the previous block jump over this one
+                prev_block->next = block->next;
+            } else {
+                // If the block found was the first of the list, then we can reassign the first element of the list.
+                free_list = block->next;
+            }
+            return block;
+        }
+        prev_block = block;
+        block = block->next;
+    }
+
+    return NULL;
+}
+
+memory_block_header* biggest_address_of_free_list() {
+    memory_block_header *current_block = free_list;
+    memory_block_header *biggest =  current_block;
+    while ((current_block = current_block->next) != NULL) {
+        if (current_block > biggest) {
+            biggest = current_block;
+        }
+    }
+    return biggest;
+}
+
+void sort_free_list() {
+    if (free_list == NULL) return;
+    memory_block_header *new_list = NULL;
+    while (free_list->next!=NULL) {
+        memory_block_header *last = remove_element_from_free_list(biggest_address_of_free_list());
+        last->next = new_list;
+        new_list = last;
+    }
+    free_list->next = new_list;
+}
+
+void trim_heap() { // This function doesn't work due to an error from the brk "Cannot allocate memory", see ./brk_error for example
+    sort_free_list();
+    void *end_of_heap = sbrk(0);
+    memory_block_header *block = free_list;
+    while (block != NULL && block->next != NULL) block = block->next;
+    char *block_end = (char *)(block + 1) + block->size;
+    if (block_end == end_of_heap){
+        if (brk(block) != (void*) -1) {
+            remove_element_from_free_list(block);
+        } else {
+            perror("trim failed due to the brl : ");
+        }
+    }
+}
+
+void fuse_free_list() {
+    sort_free_list();
+    if (free_list == NULL) return;
+    int fusion_occured;
+    do{
+        fusion_occured = 0;
+        memory_block_header *block = free_list;
+        while(block->next != NULL) {
+            char *block_end = (char *)(block + 1) + block->size;
+            if ((char *) block->next == block_end) {
+                memory_block_header *removed = remove_element_from_free_list(block->next);
+                block->size += removed->size + sizeof(memory_block_header);
+                fusion_occured = 1;
+                continue;
+            }
+            block = block->next;
+        }
+    } while (fusion_occured);
+}
 
 void *custom_malloc(size_t size) {
     if (size==0) {
@@ -41,7 +139,7 @@ void *custom_malloc(size_t size) {
     memory_block_header *new_block = (memory_block_header*) sbrk(size + sizeof(memory_block_header));
     
     // We verify the sbrk worked propely
-    if (block == (void *)-1) {
+    if (new_block == (void *)-1) {
         return NULL; 
     }
     new_block->size = size;
@@ -57,20 +155,95 @@ void custom_free(void *pointer) {
 
     block->next = free_list;
     free_list = block;
+    fuse_free_list();
+    // trim_heap();
+    
+}
+
+void *custom_realloc(void *pointer, size_t size) {
+
+    if (pointer == NULL) {
+        if (size > 0) {
+            return custom_malloc(size);
+        } else {
+            return NULL;
+        }
+    }
+    if (size == 0){
+        custom_free(pointer);
+        return NULL;
+    }
+
+
+    memory_block_header *old_block = (memory_block_header*)pointer - 1;
+    if (old_block->size >= size) {
+        // If the current block is already big enough, return the same pointer
+        return pointer;
+    } 
+    
+    // We compute the end of the memory block
+    char *old_end = (char *)(old_block + 1) + old_block->size;
+    // Refuse the free_list just in case
+    fuse_free_list();
+    // We compute the size to look for in the free list
+    size_t additional_size = size - old_block->size;
+
+    memory_block_header *block = free_list;
+    while (block!=NULL) {
+        if((char *)block == old_end && block->size >= additional_size) { // if the block follows the previous block and has enough space
+            remove_element_from_free_list(block);
+            old_block->size += block->size + sizeof(memory_block_header);
+            return (void *)(old_block + 1);
+        }
+        block = block->next;
+    }
+
+    if (old_end == sbrk(0)) { // Check if the old block is the last block in the heap
+        // Expand the heap
+        if (sbrk(additional_size) == (void *)-1) {
+            return NULL;
+        }
+        old_block->size = size;
+        return pointer;
+    } 
+
+    void *new_block = custom_malloc(size);
+    if (new_block == NULL) {
+        return NULL;
+    }
+    size_t size_to_copy = old_block->size < size ? old_block->size : size;
+    memcpy(new_block, pointer, size_to_copy);
+    custom_free(pointer);
+    return new_block;
 }
 
 int main(int agrc, char *argv[]) {
 
-    int *counter = (int*) custom_malloc(sizeof(4));
-    printf("Memory allocated at address %p with a value of %i\n", counter, *counter);
+    printf("Initial Break Address : %p\n\n", sbrk(0));
+    int *el1 = custom_malloc(sizeof(int));
+    int *el2 = custom_malloc((size_t) 100);
+    int *el3 = custom_malloc(sizeof(int));
+    printf("Break After memory allocation : %p\n", sbrk(0));
+    
+    printf("Element 1 - %p - Size : %i\n", el1,(int) ((memory_block_header *)el1 - 1)->size);
+    printf("Element 2 - %p - Size : %i\n", el2,(int) ((memory_block_header *)el2 - 1)->size);
+    printf("Element 3 - %p - Size : %i\n", el3,(int) ((memory_block_header *)el3 - 1)->size);
 
-    printf("Currently no element of free_list, so its value is pointing at NULL : %p\n", free_list);
-    custom_free(counter);
-    printf("We have freed the memory, so free_list includes now a pointer to %p (counter address minus the header size)\n", free_list);
+    printf("\nWe deallocate element 2 with custom_free");
+    custom_free(el2);
+    print_free_list();
 
-    int *counter2 = (int*) custom_malloc(sizeof(int));
-    printf("We created a new memory of the same size as the freed one, so it should take the freed address\n");
-    printf("Memory allocated at address %p with a value of %i\n", counter2, *counter2);
+    printf("\nWe reallocate element 1 with a bigger size, so it should fuse with the free address that is adjacent");
+    el1 = custom_realloc(el1, (size_t) 50);
+    print_free_list();
+    printf("\n%p - size : %i\n", el1,(int) ((memory_block_header *)el1 - 1)->size);
+
+    printf("\nIf we reallocate element 3 to a bigger size, as it is at the end of the heap, it should just move the breakline\n");
+    printf("Break Address Before : %p\n", sbrk(0));
+    el3 = custom_realloc(el3, (size_t) 100);
+    printf("Break Address After : %p\n", sbrk(0));
+    printf("Element 3 - %p - Size : %i\n", el3,(int) ((memory_block_header *)el3 - 1)->size);
+
 
 
 }
